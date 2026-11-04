@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -749,5 +750,75 @@ func TestIDsAreNeverReused(t *testing.T) {
 	}
 	if next := apiAgent(t, a, "y", "claude", ModeFull, 0, ""); next.ID == ag.ID {
 		t.Errorf("agent ID %d was reused, so the new agent would inherit the old one's cost history", ag.ID)
+	}
+}
+
+// Sends every hostname to a local server, so each service's format can be checked
+// without contacting it.
+func TestWebhookFormats(t *testing.T) {
+	type got struct {
+		body                      string
+		contentType, title, click string
+	}
+	seen := make(chan got, 1)
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		seen <- got{string(b), r.Header.Get("Content-Type"), r.Header.Get("Title"), r.Header.Get("Click")}
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
+	saved := http.DefaultTransport
+	http.DefaultTransport = &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}}
+	defer func() { http.DefaultTransport = saved }()
+
+	if err := postWebhook("http://ntfy.sh/topic", "Agent paused", "billing problem", "https://farm/#/agents/1"); err != nil {
+		t.Fatal(err)
+	}
+	g := <-seen
+	if g.body != "billing problem" || g.title != "Agent paused" || g.click != "https://farm/#/agents/1" {
+		t.Errorf("ntfy: %+v", g)
+	}
+	fields := func(hook string) map[string]string {
+		t.Helper()
+		if err := postWebhook(hook, "T", "x", "https://farm/l"); err != nil {
+			t.Fatal(err)
+		}
+		g := <-seen
+		if g.contentType != "application/json" {
+			t.Errorf("%s: content type %q", hook, g.contentType)
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(g.body), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	want := "T: x\nhttps://farm/l"
+	if m := fields("http://hooks.slack.com/services/a"); m["text"] != want || len(m) != 1 {
+		t.Errorf("slack: %v", m)
+	}
+	if m := fields("http://discord.com/api/webhooks/a"); m["content"] != want || len(m) != 1 {
+		t.Errorf("discord: %v", m)
+	}
+	if m := fields("http://example.com/hook"); m["text"] != want || m["content"] != want {
+		t.Errorf("other: %v", m)
+	}
+
+	// A webhook URL can hold a secret, so errors must never repeat it.
+	status = http.StatusForbidden
+	err := postWebhook("http://example.com/SECRET-PATH", "T", "x", "")
+	<-seen
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("bad status: %v", err)
+	}
+	srv.CloseClientConnections()
+	http.DefaultTransport = &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+		return nil, io.ErrUnexpectedEOF
+	}}
+	if err := postWebhook("http://example.com/SECRET-PATH", "T", "x", ""); err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("connection failure: %v", err)
 	}
 }

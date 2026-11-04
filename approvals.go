@@ -270,8 +270,16 @@ func postWebhook(hook, title, text, link string) error {
 		if link != "" {
 			msg += "\n" + link
 		}
-		// Slack reads text and Discord reads content.
-		b, _ := json.Marshal(map[string]string{"text": msg, "content": msg})
+		// Slack reads text and Discord reads content. Each gets only its own field, and
+		// anything else gets both.
+		body := map[string]string{"text": msg, "content": msg}
+		switch {
+		case strings.HasSuffix(u.Host, "slack.com"):
+			delete(body, "content")
+		case strings.HasSuffix(u.Host, "discord.com"), strings.HasSuffix(u.Host, "discordapp.com"):
+			delete(body, "text")
+		}
+		b, _ := json.Marshal(body)
 		req, err = http.NewRequest(http.MethodPost, hook, bytes.NewReader(b))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
