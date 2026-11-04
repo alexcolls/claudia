@@ -685,8 +685,9 @@ func TestMetrics(t *testing.T) {
 	c := cred(t, a, "c", "anthropic", map[string]string{"ANTHROPIC_API_KEY": "k"})
 	ag := apiAgent(t, a, "agent", "claude", ModeFull, c, "")
 	sub := apiAgent(t, a, "sub", "claude", ModeFull, 0, "")
-	for _, id := range []int64{ag.ID, sub.ID, 999} { // 999: a deleted agent
-		res, err := a.db.Exec(`INSERT INTO runs(agent_id,status,usd,usd_state,input,cache_read,turns,started_at,ended_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, RunSucceeded, 0.5, USDReported, 100, 50, 2, now()-10, now())
+	for _, ag := range []Agent{ag, sub, {ID: 999, Name: "gone", Preset: "bedrock"}} { // gone: a deleted agent
+		res, err := a.db.Exec(`INSERT INTO runs(agent_id,agent_name,preset,status,usd,usd_state,input,cache_read,turns,started_at,ended_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			ag.ID, ag.Name, ag.Preset, RunSucceeded, 0.5, USDReported, 100, 50, 2, now()-10, now())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -716,12 +717,37 @@ func TestMetrics(t *testing.T) {
 	for _, r := range m["by_provider"].([]any) {
 		names[r.(map[string]any)["name"].(string)] = true
 	}
-	for _, want := range []string{"anthropic", "subscription", "(deleted)"} {
+	for _, want := range []string{"anthropic", "subscription", "bedrock"} {
 		if !names[want] {
 			t.Errorf("by_provider lacks %s: %v", want, names)
 		}
 	}
+	gone := false
+	for _, r := range m["by_agent"].([]any) {
+		gone = gone || r.(map[string]any)["name"] == "gone"
+	}
+	if !gone {
+		t.Error("a deleted agent should keep its name in cost history")
+	}
 	if len(m["by_agent"].([]any)) != 3 || len(m["by_model"].([]any)) != 1 || len(m["by_day"].([]any)) != 1 || len(m["recent"].([]any)) != 3 {
 		t.Errorf("metrics: %v", m)
+	}
+}
+
+func TestIDsAreNeverReused(t *testing.T) {
+	a := testApp(t)
+	first := addTask(t, a, "first")
+	if err := a.deleteTask(first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if again := addTask(t, a, "again"); again.ID == first.ID {
+		t.Errorf("task ID %d was reused, so the new task would inherit the old one's branch", again.ID)
+	}
+	ag := apiAgent(t, a, "x", "claude", ModeFull, 0, "")
+	if _, err := a.db.Exec(`DELETE FROM agents WHERE id=?`, ag.ID); err != nil {
+		t.Fatal(err)
+	}
+	if next := apiAgent(t, a, "y", "claude", ModeFull, 0, ""); next.ID == ag.ID {
+		t.Errorf("agent ID %d was reused, so the new agent would inherit the old one's cost history", ag.ID)
 	}
 }

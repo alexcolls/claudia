@@ -180,7 +180,8 @@ func (a *App) execRun(r *liveRun, j Job) Outcome {
 	if j.TaskID != 0 {
 		taskID = j.TaskID
 	}
-	res, err := a.db.Exec(`INSERT INTO runs(agent_id,task_id,started_at) VALUES(?,?,?)`, ag.ID, taskID, now())
+	// Name and provider are copied so cost history stays readable after the agent is deleted.
+	res, err := a.db.Exec(`INSERT INTO runs(agent_id,agent_name,preset,task_id,started_at) VALUES(?,?,?,?,?)`, ag.ID, ag.Name, ag.Preset, taskID, now())
 	if err != nil {
 		out.Error = err.Error()
 		return out

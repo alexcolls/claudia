@@ -19,13 +19,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// IDs of credentials, agents and tasks are never reused. A task ID names a git branch
+// and a work directory, and an agent ID owns a volume and a cost history, so a reused
+// ID would inherit a deleted one's branch or spend.
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (
-	id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, preset TEXT NOT NULL,
+	id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, preset TEXT NOT NULL,
 	secret BLOB NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS agents (
-	id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, cli TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
+	id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, cli TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
 	mode TEXT NOT NULL, allowed_tools TEXT NOT NULL DEFAULT '', credential_id INTEGER,
 	accepts_queue INTEGER NOT NULL DEFAULT 1, token TEXT NOT NULL,
 	max_run_usd REAL NOT NULL DEFAULT 0, daily_budget_usd REAL NOT NULL DEFAULT 0,
@@ -33,7 +36,7 @@ CREATE TABLE IF NOT EXISTS agents (
 	session TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, marks TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS tasks (
-	id INTEGER PRIMARY KEY, title TEXT NOT NULL, repo TEXT NOT NULL, base_branch TEXT NOT NULL DEFAULT 'main',
+	id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, repo TEXT NOT NULL, base_branch TEXT NOT NULL DEFAULT 'main',
 	prompt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, cli TEXT NOT NULL DEFAULT '', preset TEXT NOT NULL DEFAULT '',
 	git_credential_id INTEGER, status TEXT NOT NULL DEFAULT 'queued', agent_id INTEGER,
 	attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 2,
@@ -41,7 +44,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 	error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS task_deps (task_id INTEGER NOT NULL, dep_id INTEGER NOT NULL, PRIMARY KEY (task_id, dep_id));
 CREATE TABLE IF NOT EXISTS runs (
-	id INTEGER PRIMARY KEY, agent_id INTEGER NOT NULL, task_id INTEGER, session TEXT NOT NULL DEFAULT '',
+	id INTEGER PRIMARY KEY, agent_id INTEGER NOT NULL, agent_name TEXT NOT NULL DEFAULT '', preset TEXT NOT NULL DEFAULT '',
+	task_id INTEGER, session TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT 'running', error TEXT NOT NULL DEFAULT '', usd REAL NOT NULL DEFAULT 0,
 	usd_state TEXT NOT NULL DEFAULT '', input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0,
 	cache_read INTEGER NOT NULL DEFAULT 0, cache_write INTEGER NOT NULL DEFAULT 0, turns INTEGER NOT NULL DEFAULT 0,
