@@ -1,0 +1,10 @@
+{
+  "name": "Claudia",
+  "short_name": "Claudia",
+  "description": "Control plane for a farm of coding agents",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#1a1a19",
+  "theme_color": "#1a1a19",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

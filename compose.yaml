@@ -1,0 +1,52 @@
+name: claudia
+
+services:
+  # One-shot: builds the agent image and creates the agent network, so
+  # `docker compose up` is the only setup step.
+  agent-image:
+    image: claudia-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command: ["true"]
+    restart: "no"
+    networks: [agents]
+
+  claudia:
+    image: claudia:latest
+    build: .
+    restart: unless-stopped
+    depends_on:
+      agent-image:
+        condition: service_completed_successfully
+    environment:
+      CLAUDIA_PASSWORD: ${CLAUDIA_PASSWORD:-}
+      CLAUDIA_PUBLIC_URL: ${CLAUDIA_PUBLIC_URL:-}
+      # Published on loopback only, below. Reach it through Tailscale or your own
+      # proxy, or use compose.https.yaml for automatic HTTPS.
+      CLAUDIA_INSECURE_HTTP: "1"
+      CLAUDIA_AGENT_MEMORY: ${CLAUDIA_AGENT_MEMORY:-4g}
+      CLAUDIA_AGENT_CPUS: ${CLAUDIA_AGENT_CPUS:-2}
+    ports:
+      - "${CLAUDIA_BIND:-127.0.0.1}:${CLAUDIA_PORT:-8080}:8080"
+      # The approval endpoint. Agents have no route to this container, because
+      # inter-container traffic is off on their network and this container isn't
+      # on it. They reach it only through this port on the network's gateway.
+      - "10.77.0.1:8081:8081"
+    volumes:
+      # Root on the host, in effect. Agents never get it.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - claudia-data:/data
+
+networks:
+  agents:
+    name: claudia-agents
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+          gateway: 10.77.0.1
+
+volumes:
+  claudia-data:
