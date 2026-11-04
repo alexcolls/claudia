@@ -33,6 +33,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* or any display rule below would override it */
 html, body { margin: 0; height: 100%; }
 body {
   background: var(--plane); color: var(--ink);
@@ -129,7 +130,7 @@ details > summary { cursor: pointer; font-weight: 600; min-height: 28px; }
 .tool.err { border-color: var(--critical); }
 .composer { position: sticky; bottom: 60px; display: flex; gap: 8px; align-items: flex-end; background: var(--plane); padding: 6px 0; }
 .composer textarea { flex: 1; }
-.term-wrap { background: #000; border-radius: 8px; padding: 6px; height: 62vh; min-height: 260px; }
+.term-wrap { background: #000; border-radius: 8px; padding: 6px; height: 55vh; min-height: 240px; }
 .term-wrap > div { height: 100%; }
 .keys { display: flex; gap: 6px; flex-wrap: wrap; }
 .keys button { min-width: 44px; font-size: 13px; padding: 5px 9px; }
@@ -139,7 +140,8 @@ details > summary { cursor: pointer; font-weight: 600; min-height: 28px; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th { text-align: left; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
 th, td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--grid); }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table-wrap td.break { overflow-wrap: normal; white-space: nowrap; } /* the table scrolls sideways instead */
 pre.code { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; background: var(--plane); padding: 8px 10px; border-radius: 8px; }
 
 /* charts */

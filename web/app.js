@@ -272,9 +272,12 @@ function agentForm(existing, onDone) {
   async function refreshModes() {
     const c = creds.find((x) => String(x.id) === cred.value);
     const list = await api("/modes?cli=" + encodeURIComponent(cli.value) + "&preset=" + encodeURIComponent(c ? c.preset : ""));
-    const keep = mode.value || ag.mode || (list.includes("ask") ? "ask" : list[0]);
+    // Default to the safest mode the CLI offers. Modes are listed safest first.
+    const wanted = mode.value || ag.mode;
+    const keep = list.includes(wanted) ? wanted : list[0];
     clear(mode, list.map((m) => h("option", { value: m, selected: m === keep }, MODE_NAMES[m] || m)));
     toolsField.hidden = mode.value !== "allowlist";
+    tools.placeholder = cli.value === "agy" ? "command(git status),command(npm test)" : "Read,Edit,Bash(git status)";
     const p = c && presets.find((x) => x.key === c.preset);
     let text = p && p.note ? p.note : "";
     if (!c && cli.value === "claude") {
@@ -290,7 +293,7 @@ function agentForm(existing, onDone) {
     if (cli.value === "claude") opts.push(h("option", { value: "", selected: editing && !ag.credential_id }, "Claude subscription (sign in from the terminal)"));
     clear(cred, opts);
   }
-  cli.addEventListener("change", act(async () => { fillCreds(); await refreshModes(); }));
+  cli.addEventListener("change", act(async () => { clear(mode); fillCreds(); await refreshModes(); }));
   cred.addEventListener("change", act(refreshModes));
   mode.addEventListener("change", () => { toolsField.hidden = mode.value !== "allowlist"; });
   (async () => {
@@ -379,13 +382,14 @@ function agentPage(id) {
     const wrap = h("div", { class: "term-wrap" }, box);
     const status = h("span", { class: "small muted" }, "Connecting...");
     const send = (data) => { if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(data)); };
-    // Phones have no Esc or Ctrl key.
+    // Phones have no Esc or Ctrl key. Above the terminal, since an on-screen keyboard
+    // covers whatever is below it.
     const keys = h("div", { class: "keys" }, [["Esc", "\x1b"], ["Tab", "\t"], ["Ctrl-C", "\x03"], ["Ctrl-D", "\x04"], ["Up", "\x1b[A"], ["Down", "\x1b[B"], ["Enter", "\r"]]
       .map(([label, seq]) => h("button", { type: "button", onclick: () => { send(seq); t.focus(); } }, label)));
     let ws = null;
     const reconnect = h("button", { type: "button", hidden: true, onclick: () => connect() }, "Reconnect");
     clear(body, ag && !ag.credential_id ? h("div", { class: "banner" }, "Subscription agent. To sign in, run: claude auth login") : null,
-      h("div", { class: "row between" }, status, reconnect), wrap, keys,
+      h("div", { class: "row between" }, status, reconnect), keys, wrap,
       h("p", { class: "hint" }, "The session runs in tmux, so it keeps going if you lose connection. API keys aren't in this shell."));
     const t = new window.Terminal({ convertEol: false, fontSize: 13, cursorBlink: true, scrollback: 5000 });
     const fit = new window.FitAddon.FitAddon();
@@ -760,7 +764,8 @@ function dailyChart(rows) {
     const svg = s("svg", { viewBox: "0 0 " + width + " " + height, role: "img", "aria-label": "Estimated spend per day for the last 30 days. The table below has the values." });
     for (const t of [0, max / 2, max]) {
       svg.append(s("line", { class: t === 0 ? "base" : "grid", x1: left, x2: width - right, y1: y(t), y2: y(t) }));
-      const label = s("text", { x: left - 6, y: y(t) + 4, "text-anchor": "end" }, usd(t));
+      // Two significant figures: rounding a tick to cents would misstate the axis.
+      const label = s("text", { x: left - 6, y: y(t) + 4, "text-anchor": "end" }, t === 0 ? "$0" : "$" + Number(t.toPrecision(2)));
       svg.append(label);
     }
     days.forEach((d, i) => {
@@ -799,6 +804,11 @@ function dailyChart(rows) {
   return h("div", { style: "display:flex;flex-direction:column;gap:8px" }, wrap, table);
 }
 
+// Spend we can't measure must not read as $0.
+function spendLabel(r) {
+  return !r.usd && r.not_priced ? "not priced" : usd(r.usd);
+}
+
 // Ranked bars, one color: the order and length carry it, and each value is printed.
 function barCard(title, rows) {
   const card = h("div", { class: "card" }, h("h3", null, title));
@@ -811,7 +821,7 @@ function barCard(title, rows) {
     h("div", { class: "bar-label" }, r.name),
     h("div", { class: "bar-line" },
       h("div", { class: "bar-track" }, h("div", { class: "bar-fill", style: "width:" + (max ? Math.max((r.usd / max) * 100, 1) : 1) + "%", title: r.name + ": " + usd(r.usd) })),
-      h("span", { class: "bar-value" }, usd(r.usd) + " · " + r.runs + (r.runs === 1 ? " run" : " runs")))))));
+      h("span", { class: "bar-value" }, spendLabel(r) + " · " + r.runs + (r.runs === 1 ? " run" : " runs")))))));
   return card;
 }
 
@@ -829,7 +839,7 @@ function perfCard(rows) {
     ["Retries", (r) => count(r.retries), true],
     ["Tool calls", (r) => count(r.tool_calls), true],
     ["Denied", (r) => count(r.denials), true],
-    ["Spend", (r) => usd(r.usd), true],
+    ["Spend", spendLabel, true],
   ];
   card.append(h("div", { class: "table-wrap" }, h("table", null,
     h("thead", null, h("tr", null, cols.map(([c, , n]) => h("th", { class: n ? "num" : null }, c)))),
