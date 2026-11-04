@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/cgi"
 	"os"
 	"regexp"
 	"strings"
@@ -43,6 +44,7 @@ func record(v map[string]any) {
 func main() {
 	addr := flag.String("addr", "127.0.0.1:9999", "listen address")
 	logPath := flag.String("log", "", "append one JSON line per request to this file")
+	gitRoot := flag.String("git", "", "serve bare repos under /git/ from this directory; pushes need the password gittoken")
 	flag.Parse()
 	if *logPath != "" {
 		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -55,6 +57,13 @@ func main() {
 	mux.HandleFunc("POST /v1/messages", anthropic)
 	mux.HandleFunc("POST /v1/responses", openai)
 	mux.HandleFunc("/mcp", mcp)
+	mux.HandleFunc("POST /hook", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		record(map[string]any{"api": "hook", "body": string(b)})
+	})
+	if *gitRoot != "" {
+		mux.Handle("/git/", gitServer(*gitRoot))
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "enerateContent") { // /v1beta/models/<model>:streamGenerateContent
 			gemini(w, r)
@@ -65,6 +74,33 @@ func main() {
 	})
 	log.Printf("fakemodel listening on %s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
+}
+
+// gitServer is a smart-HTTP git server. Reads are open, as with a public repo, and
+// pushes need a token, so tests can show the token reached git and nothing else.
+func gitServer(root string) http.Handler {
+	backend := &cgi.Handler{
+		Path: "/usr/lib/git-core/git-http-backend", Root: "/git",
+		Env:  []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1", "REMOTE_USER=claudia"},
+		Args: []string{},
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "git-receive-pack") || strings.HasSuffix(r.URL.Path, "git-receive-pack") {
+			_, pw, ok := r.BasicAuth()
+			if !ok {
+				w.Header().Set("WWW-Authenticate", `Basic realm="git"`)
+				http.Error(w, "auth required", http.StatusUnauthorized)
+				return
+			}
+			if pw != "gittoken" {
+				record(map[string]any{"api": "git", "event": "bad token"})
+				http.Error(w, "bad token", http.StatusForbidden)
+				return
+			}
+			record(map[string]any{"api": "git", "event": "authenticated push"})
+		}
+		backend.ServeHTTP(w, r)
+	})
 }
 
 func sse(w http.ResponseWriter, event string, v any) {
@@ -99,6 +135,13 @@ type anthropicReq struct {
 }
 
 func anthropic(w http.ResponseWriter, r *http.Request) {
+	switch r.Header.Get("x-api-key") + r.Header.Get("Authorization") {
+	case "bad-key", "Bearer bad-key":
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
+		return
+	}
 	var req anthropicReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), 400)
