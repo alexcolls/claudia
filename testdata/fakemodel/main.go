@@ -328,12 +328,60 @@ func openai(w http.ResponseWriter, r *http.Request) {
 
 func gemini(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
-	record(map[string]any{"api": "gemini?", "path": r.URL.Path, "last": trim(string(body), 300)})
-	if !strings.Contains(r.URL.Path, ":streamGenerateContent") && !strings.Contains(r.URL.Path, ":generateContent") {
-		http.NotFound(w, r)
-		return
+	var req struct {
+		Contents []struct {
+			Parts []map[string]any `json:"parts"`
+		} `json:"contents"`
+		Tools []struct {
+			FunctionDeclarations []struct {
+				Name       string `json:"name"`
+				Parameters struct {
+					Required   []string                  `json:"required"`
+					Properties map[string]map[string]any `json:"properties"`
+				} `json:"parametersJsonSchema"`
+			} `json:"functionDeclarations"`
+		} `json:"tools"`
 	}
-	chunk := map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": "ok"}}}, "finishReason": "STOP"}},
+	json.Unmarshal(body, &req)
+	last, hasResult := "", false
+	if n := len(req.Contents); n > 0 {
+		b, _ := json.Marshal(req.Contents[n-1])
+		last = string(b)
+		hasResult = strings.Contains(last, "functionResponse")
+	}
+	cmd, _ := choose(last)
+	part := map[string]any{"text": "ok"}
+	if hasResult {
+		part = map[string]any{"text": "done"}
+	} else if cmd != "" {
+		// Fill in whatever the CLI's shell tool requires.
+		for _, t := range req.Tools {
+			for _, f := range t.FunctionDeclarations {
+				if f.Name != "run_command" {
+					continue
+				}
+				args := map[string]any{}
+				for _, name := range f.Parameters.Required {
+					switch l := strings.ToLower(name); {
+					case strings.Contains(l, "command"):
+						args[name] = cmd
+					case strings.Contains(l, "cwd"), strings.Contains(l, "dir"):
+						args[name] = "/tmp"
+					case f.Parameters.Properties[name]["type"] == "boolean":
+						args[name] = false
+					case f.Parameters.Properties[name]["type"] == "string":
+						args[name] = "test"
+					default:
+						args[name] = 0
+					}
+				}
+				record(map[string]any{"api": "gemini", "tool_args": args})
+				part = map[string]any{"functionCall": map[string]any{"name": f.Name, "args": args}}
+			}
+		}
+	}
+	record(map[string]any{"api": "gemini", "path": r.URL.Path, "contents": len(req.Contents), "last": trim(last, 300)})
+	chunk := map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"role": "model", "parts": []any{part}}, "finishReason": "STOP"}},
 		"usageMetadata": map[string]any{"promptTokenCount": 100, "cachedContentTokenCount": 40, "candidatesTokenCount": 7, "thoughtsTokenCount": 2, "totalTokenCount": 109}}
 	if strings.Contains(r.URL.Path, ":generateContent") {
 		json.NewEncoder(w).Encode(chunk)
