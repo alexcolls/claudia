@@ -339,6 +339,8 @@ func (a *App) preflight(ag Agent) string {
 func taskAfterRun(t Task, o Outcome) (status, errText string, refund bool) {
 	errText = o.Error
 	switch {
+	case o.PerRunCap:
+		return TaskFailed, errText, false // nothing clears this cap, so a restart would only spend it again
 	case o.Pause != "", o.Status == RunBudgetStopped:
 		return TaskQueued, errText, true
 	case o.Status == RunStopped:

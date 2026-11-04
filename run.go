@@ -148,6 +148,8 @@ type Outcome struct {
 	Error   string
 	Session string
 	Pause   string // non-empty when it failed in a way only the owner can fix
+	// PerRunCap says the agent's per-run cap stopped it, which no budget period clears.
+	PerRunCap bool
 }
 
 // Job is one CLI invocation.
@@ -363,6 +365,7 @@ func (a *App) execRun(r *liveRun, j Job) Outcome {
 		errText = result.Error
 		if result.Reason == "budget_exhausted" {
 			status, errText = RunBudgetStopped, "Hit this agent's per-run budget"
+			out.PerRunCap = true
 		}
 	default:
 		errText = lastLine(tail.String())
