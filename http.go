@@ -79,7 +79,14 @@ func (h *Hub) publish(m Message) {
 	}
 }
 
-func isStatePing(m Message) bool { return string(m.Data) == `{"kind":"state"}` }
+const statePingData = `{"kind":"state"}`
+
+// statePing tells open pages that something changed and they should refresh.
+func statePing(agentID int64) Message {
+	return Message{AgentID: agentID, Data: json.RawMessage(statePingData)}
+}
+
+func isStatePing(m Message) bool { return string(m.Data) == statePingData }
 
 func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)

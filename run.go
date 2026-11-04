@@ -67,6 +67,7 @@ func (a *App) reserve(agentID int64) (*liveRun, error) {
 	}
 	r := &liveRun{agentID: agentID, done: make(chan struct{}), live: Usage{}}
 	a.runs[agentID] = r
+	a.hub.publish(statePing(agentID))
 	return r, nil
 }
 
@@ -75,7 +76,7 @@ func (a *App) release(r *liveRun) {
 	delete(a.runs, r.agentID)
 	a.mu.Unlock()
 	close(r.done)
-	a.hub.publish(Message{AgentID: r.agentID, Data: []byte(`{"kind":"state"}`)})
+	a.hub.publish(statePing(r.agentID))
 	a.kick()
 }
 

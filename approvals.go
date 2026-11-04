@@ -152,7 +152,7 @@ func (a *App) requestApproval(ctx context.Context, ag Agent, tool string, input 
 		a.mu.Unlock()
 	}()
 	a.addEvent(ag.ID, 0, Event{Kind: "status", Text: "Waiting for your approval: " + tool})
-	a.hub.publish(Message{AgentID: ag.ID, Data: []byte(`{"kind":"state"}`)})
+	a.hub.publish(statePing(ag.ID))
 	// Names the tool only: the input can hold secrets and this goes to a third party.
 	a.notify(ag.Name+" needs approval", "Wants to use "+tool, fmt.Sprintf("#/approvals/%d", id))
 
@@ -174,7 +174,7 @@ func (a *App) closeApproval(id int64, status, message string) {
 	if _, err := a.db.Exec(`UPDATE approvals SET status=?,message=?,decided_at=? WHERE id=? AND status='pending'`, status, message, now(), id); err != nil {
 		log.Printf("approval %d: %v", id, err)
 	}
-	a.hub.publish(Message{Data: []byte(`{"kind":"state"}`)})
+	a.hub.publish(statePing(0))
 }
 
 // decideApproval applies the owner's answer. It fails for a request no agent is
@@ -200,7 +200,7 @@ func (a *App) decideApproval(id int64, d decision) error {
 		return errors.New("that request has already been decided")
 	}
 	ch <- d
-	a.hub.publish(Message{Data: []byte(`{"kind":"state"}`)})
+	a.hub.publish(statePing(0))
 	return nil
 }
 
