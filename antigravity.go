@@ -46,7 +46,9 @@ func (agyAdapter) Command(s RunSpec) ([]string, string) {
 	return append(argv, "--settings", string(b)), ""
 }
 
-func (agyAdapter) Parser(a Agent) Parser { return &agyParser{model: a.Model, text: map[int]string{}, tools: map[int]bool{}} }
+func (agyAdapter) Parser(a Agent) Parser {
+	return &agyParser{model: a.Model, text: map[int]string{}, tools: map[int]bool{}}
+}
 
 // agyParser needs the agent's model because agy only sometimes names one.
 type agyParser struct {
