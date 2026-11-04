@@ -337,3 +337,23 @@ func TestModes(t *testing.T) {
 		t.Error("unknown CLI")
 	}
 }
+
+func TestPauseFromText(t *testing.T) {
+	// Real wording from OpenAI and Google, as seen through the CLIs.
+	_, res, _ := replay(t, agyAdapter{}.Parser(Agent{}), "agy_fakekey")
+	cases := map[string]string{
+		"unexpected status 401 Unauthorized: Incorrect API key provided: x": "authentication failed",
+		res.Error:                                 "authentication failed",
+		"authentication failed or timed out":      "authentication failed",
+		"insufficient_quota: you exceeded it":     "billing problem",
+		"Your credit balance is too low":          "billing problem",
+		"unexpected status 429 Too Many Requests": "rate limited",
+		"the build failed on line 3":              "",
+		"":                                        "",
+	}
+	for text, want := range cases {
+		if got := pauseFromText(text); got != want {
+			t.Errorf("%q: got %q, want %q", text, got, want)
+		}
+	}
+}

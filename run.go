@@ -377,6 +377,9 @@ func (a *App) execRun(r *liveRun, j Job) Outcome {
 	out.Status, out.Error, out.OK, out.Session = status, errText, status == RunSucceeded, session
 	if status == RunFailed || status == RunTimedOut {
 		out.Pause = pause
+		if out.Pause == "" {
+			out.Pause = pauseFromText(errText)
+		}
 	}
 	var apiMS int64
 	if result != nil {

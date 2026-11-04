@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // USD states recorded on a run, from most to least trustworthy. All of them are
 // estimates: even a CLI's own figure is computed client-side.
 const (
@@ -126,6 +128,22 @@ func pauseClass(category string) string {
 	case "billing_error", "account_on_hold":
 		return "billing problem"
 	case "rate_limit":
+		return "rate limited"
+	}
+	return ""
+}
+
+// pauseFromText does the same for CLIs that report no error category. The strings
+// are from real responses: OpenAI's 401 through Codex and Google's 400 through agy.
+func pauseFromText(text string) string {
+	t := strings.ToLower(text)
+	switch {
+	case strings.Contains(t, "401 unauthorized"), strings.Contains(t, "incorrect api key"), strings.Contains(t, "api key not valid"),
+		strings.Contains(t, "invalid api key"), strings.Contains(t, "authentication failed"), strings.Contains(t, "authentication required"):
+		return "authentication failed"
+	case strings.Contains(t, "insufficient_quota"), strings.Contains(t, "credit balance"), strings.Contains(t, "billing"):
+		return "billing problem"
+	case strings.Contains(t, "429 too many"), strings.Contains(t, "rate limit"), strings.Contains(t, "resource_exhausted"):
 		return "rate limited"
 	}
 	return ""
