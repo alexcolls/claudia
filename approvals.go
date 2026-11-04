@@ -170,6 +170,14 @@ func (a *App) requestApproval(ctx context.Context, ag Agent, tool string, input 
 	}
 }
 
+func (a *App) pendingApprovals(agentID int64) int {
+	var n int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM approvals WHERE agent_id=? AND status='pending'`, agentID).Scan(&n); err != nil {
+		log.Printf("approvals: %v", err)
+	}
+	return n
+}
+
 func (a *App) closeApproval(id int64, status, message string) {
 	if _, err := a.db.Exec(`UPDATE approvals SET status=?,message=?,decided_at=? WHERE id=? AND status='pending'`, status, message, now(), id); err != nil {
 		log.Printf("approval %d: %v", id, err)

@@ -75,7 +75,7 @@ If you offer this to other people rather than running it for yourself, Anthropic
 - **Budgets can overshoot.** A cap is checked as usage arrives. Claude Code and Antigravity report as they go, but Codex reports only at the end of a turn, so its real ceiling is the run's time limit.
 - **Restarting the control plane interrupts running agents.** Runs are marked `interrupted`, those containers restart, and pending approvals expire. Tasks then resume from the CLI's saved session.
 - **Repo config doesn't run.** Claude Code gets `--setting-sources user --strict-mcp-config`, so a repo's hooks, MCP servers and skills don't load. Otherwise one agent's branch could run code in the next agent's turn. CLAUDE.md doesn't load either, so task prompts tell the agent to read it.
-- **Approvals:** Claude Code only, because the other CLIs have no way to ask a person when running headless. A request waits up to 23 hours, then it's denied.
+- **Approvals:** Claude Code only, because the other CLIs have no way to ask a person when running headless. A request waits up to 23 hours, then it's denied. Time spent waiting doesn't count against the run's time limit.
 
 ## Backups and upgrades
 

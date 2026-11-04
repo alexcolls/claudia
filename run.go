@@ -232,7 +232,16 @@ func (a *App) execRun(r *liveRun, j Job) Outcome {
 	script := `echo $$ >/tmp/run.pid; exec timeout -s INT -k 60 "$0" "$@"`
 	flags, procEnv := execEnv(env)
 	args := append([]string{"exec", "-i", "-w", j.Cwd}, flags...)
-	args = append(args, name, "sh", "-c", script, itoa(ag.RunLimitSec))
+	limit := ag.RunLimitSec
+	if ag.Mode == ModeAsk {
+		// Time spent waiting for the owner isn't the agent working, so the real
+		// limit is enforced by watchWorkTime, and this is only a backstop.
+		limit += int((approvalLimit + time.Hour).Seconds())
+		watchDone := make(chan struct{})
+		defer close(watchDone)
+		go a.watchWorkTime(ag, watchDone)
+	}
+	args = append(args, name, "sh", "-c", script, itoa(limit))
 	args = append(args, argv...)
 	cmd := exec.Command("docker", args...)
 	cmd.Env = procEnv
@@ -358,6 +367,8 @@ func (a *App) execRun(r *liveRun, j Job) Outcome {
 		status = RunSucceeded
 	case reason == RunBudgetStopped:
 		status, errText = RunBudgetStopped, "A budget cap was reached"
+	case reason == RunTimedOut:
+		status, errText = RunTimedOut, fmt.Sprintf("Hit the %d second run limit", ag.RunLimitSec)
 	case reason != "":
 		status, errText = RunStopped, "Stopped by the owner"
 	case exitCode == 124 || (exitCode == 137 && result == nil):
@@ -409,6 +420,29 @@ func (a *App) execRun(r *liveRun, j Job) Outcome {
 	a.addEvent(ag.ID, out.RunID, Event{Kind: "status", Text: runSummary(status, settled)})
 	a.enforceBudgets()
 	return out
+}
+
+// watchWorkTime stops an ask-first run once it has used its time limit, not
+// counting time spent waiting on the owner.
+func (a *App) watchWorkTime(ag Agent, done <-chan struct{}) {
+	const step = 5 * time.Second
+	tick := time.NewTicker(step)
+	defer tick.Stop()
+	var worked time.Duration
+	for {
+		select {
+		case <-done:
+			return
+		case <-tick.C:
+		}
+		if a.pendingApprovals(ag.ID) > 0 {
+			continue
+		}
+		if worked += step; worked >= time.Duration(ag.RunLimitSec)*time.Second {
+			a.stopRun(ag.ID, RunTimedOut)
+			return
+		}
+	}
 }
 
 // saveSession records a confirmed session for the next turn. A task keeps its own
