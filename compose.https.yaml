@@ -1,0 +1,12 @@
+# Automatic HTTPS with Let's Encrypt. Needs a domain pointing at this server, with
+# ports 80 and 443 open:
+#
+#   CLAUDIA_DOMAIN=farm.example.com docker compose -f compose.yaml -f compose.https.yaml up -d
+services:
+  claudia:
+    environment:
+      CLAUDIA_DOMAIN: ${CLAUDIA_DOMAIN:?set CLAUDIA_DOMAIN}
+      CLAUDIA_INSECURE_HTTP: "0"
+    ports:
+      - "80:80"
+      - "443:443"
