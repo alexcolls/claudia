@@ -36,6 +36,11 @@ func docker(ctx context.Context, args ...string) (string, error) {
 // sign-ins survive that. No secrets are set here: they would show up in docker
 // inspect. They go on each exec instead.
 func (a *App) ensureContainer(ctx context.Context, id int64) error {
+	// ponytail: one lock for all agents, so a run and a terminal opening together can't
+	// both create the container. Starting one takes under a second, so this holds up
+	// little until agents start in large batches. Per-agent locks would fix that.
+	a.containerMu.Lock()
+	defer a.containerMu.Unlock()
 	name := containerName(id)
 	state, err := docker(ctx, "inspect", "--format", "{{.State.Running}} {{.Image}}", name)
 	want, ierr := docker(ctx, "image", "inspect", "--format", "{{.Id}}", a.cfg.AgentImage)

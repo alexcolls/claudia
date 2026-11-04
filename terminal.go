@@ -23,9 +23,13 @@ func (a *App) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusNotFound, "No such agent")
 		return
 	}
-	if err := a.ensureContainer(r.Context(), id); err != nil {
-		apiError(w, http.StatusInternalServerError, "Couldn't start the container: "+err.Error())
-		return
+	// A busy agent's container already exists. Checking it here could recreate it for
+	// a new image, which would kill the run.
+	if !a.isRunning(id) {
+		if err := a.ensureContainer(r.Context(), id); err != nil {
+			apiError(w, http.StatusInternalServerError, "Couldn't start the container: "+err.Error())
+			return
+		}
 	}
 	// Rejects other origins by default.
 	c, err := websocket.Accept(w, r, nil)

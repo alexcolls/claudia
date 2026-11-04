@@ -71,6 +71,8 @@ type App struct {
 	hub  *Hub
 	wake chan struct{}
 
+	containerMu sync.Mutex // serialises creating containers
+
 	mu          sync.Mutex // guards the fields below
 	runs        map[int64]*liveRun
 	waiting     map[int64]chan decision
