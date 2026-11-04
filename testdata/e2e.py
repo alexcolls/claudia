@@ -255,6 +255,26 @@ def main():
         evs, _ = feed(allow)
         check("allowlist: the denial shows in the feed", [e for e in evs if "Denied" in e.get("text", "")], evs[-3:])
 
+    if section("modes"):
+        reviewed = new_agent("e2e-reviewed", "claude", c_anthropic, mode="reviewed", model="claude-sonnet-4-5")
+        say(reviewed, "hello")
+        idle(reviewed)
+        check("reviewed mode starts and answers", last_run("e2e-reviewed")["status"] == "succeeded", last_run("e2e-reviewed"))
+        evs, _ = feed(reviewed)
+        check("reviewed mode ran as auto", not [e for e in evs if e["kind"] == "error"], evs[-3:])
+
+        allow_ok = new_agent("e2e-agy-allow", "agy", c_gemini, mode="allowlist", allowed_tools="command(echo)", model="gemini-4-argon")
+        say(allow_ok, "TOOL:echo listed")
+        idle(allow_ok)
+        evs, _ = feed(allow_ok)
+        check("agy: a listed command runs", [e for e in evs if e["kind"] == "tool_result" and "listed" in e.get("text", "")], evs[-5:])
+        check("agy: tool output reaches the feed", not [e for e in evs if "Denied" in e.get("text", "")], evs[-5:])
+        allow_no = new_agent("e2e-agy-deny", "agy", c_gemini, mode="allowlist", allowed_tools="command(ls)", model="gemini-4-argon")
+        say(allow_no, "TOOL:echo unlisted")
+        idle(allow_no)
+        evs, _ = feed(allow_no)
+        check("agy: an unlisted command is denied, and the feed says so", [e for e in evs if "Denied" in e.get("text", "")], evs[-5:])
+
     if section("approvals"):
         api("/settings", "PUT", {"webhook_url": FAKE + "/hook"})
         ask = new_agent("e2e-ask", "claude", c_anthropic, mode="ask", model="claude-sonnet-4-5")
@@ -286,6 +306,22 @@ def main():
         check("a question gets answered", last_run("e2e-ask")["status"] == "succeeded", last_run("e2e-ask"))
         asks = [x for x in fake_log() if x.get("api") == "anthropic" and "Which one?" in x.get("last", "") and "B" in x.get("last", "")]
         check("the answer reaches the model", bool(asks))
+
+        # Waiting on the owner doesn't count against the run limit, but working does.
+        short = new_agent("e2e-short", "claude", c_anthropic, mode="ask", model="claude-sonnet-4-5", run_limit_sec=15)
+        say(short, "TOOL:echo late > /tmp/late")
+        p = wait("a pending approval", lambda: next((x for x in api("/approvals?pending=1") if x["agent_name"] == "e2e-short"), None))
+        time.sleep(30)
+        check("a long wait for approval outlasts the run limit", agent_state(short)["running"])
+        api(f"/approvals/{p['id']}", "POST", {"allow": True})
+        idle(short)
+        check("the run carries on after the wait", run_in(short, "cat", "/tmp/late").stdout.strip() == "late" and last_run("e2e-short")["status"] == "succeeded", last_run("e2e-short"))
+        say(short, "SLOW")
+        running(short)
+        start = time.time()
+        idle(short, 50)
+        r = last_run("e2e-short")
+        check("working past the limit still stops it", r["status"] == "timed_out" and time.time() - start < 45, (r, time.time() - start))
 
         # Stopping while an approval waits clears the request.
         say(ask, "TOOL:echo no > /tmp/x")
@@ -452,12 +488,40 @@ def main():
         idle(claude)
         check("a repo's hooks don't run", run_in(claude, "test", "-e", "/tmp/hook-ran").returncode != 0)
 
+        # Secret files go on tmpfs, never on the volume.
+        c_file = api("/credentials", "POST", {"name": "with a file", "preset": "anthropic", "env": {"ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": FAKE},
+                                              "files": {"GOOGLE_APPLICATION_CREDENTIALS": "file-secret-e2e"}})["id"]
+        withfile = new_agent("e2e-file", "claude", c_file, model="claude-sonnet-4-5")
+        say(withfile, "TOOL:echo $GOOGLE_APPLICATION_CREDENTIALS > /tmp/where")
+        idle(withfile)
+        path = run_in(withfile, "cat", "/tmp/where").stdout.strip()
+        check("a secret file's path is in the environment", path == "/run/claudia/GOOGLE_APPLICATION_CREDENTIALS", path)
+        check("the secret file has its contents", run_in(withfile, "cat", path).stdout == "file-secret-e2e")
+        check("the secret file is owner-only", run_in(withfile, "stat", "-c", "%a", path).stdout.strip() == "600")
+        check("the secret file is on tmpfs", "tmpfs" in run_in(withfile, "df", "--output=fstype", path).stdout)
+        check("the secret isn't on the volume", run_in(withfile, "grep", "-r", "file-secret-e2e", "/home/agent").returncode != 0)
+
         # An agent killing its own main process.
         sh("docker", "exec", container(claude), "pkill", "-x", "sleep")
         time.sleep(4)
         say(claude, "still alive?")
         idle(claude)
         check("survives killing its own main process", last_run("e2e-claude")["status"] == "succeeded", last_run("e2e-claude"))
+
+    if section("image"):
+        say(claude, "before the image changes")
+        idle(claude)
+        sess = agent_state(claude)["session"]
+        run_in(claude, "sh", "-c", "echo kept > ~/kept-on-volume; echo gone > /tmp/gone-with-container")
+        before = sh("docker", "inspect", container(claude), "--format", "{{.Id}}").stdout
+        sh("docker", "build", "-t", "claudia-agent:latest", "--label", "e2e=" + str(time.time()), "-", input="FROM claudia-agent:latest\n", check_rc=True)
+        say(claude, "after the image changes")
+        idle(claude)
+        check("a changed image recreates the container", sh("docker", "inspect", container(claude), "--format", "{{.Id}}").stdout != before)
+        check("the run works on the new container", last_run("e2e-claude")["status"] == "succeeded", last_run("e2e-claude"))
+        check("the volume survives", run_in(claude, "cat", "/home/agent/kept-on-volume").stdout.strip() == "kept")
+        check("the session survives", agent_state(claude)["session"] == sess)
+        check("the old container's files are gone", run_in(claude, "test", "-e", "/tmp/gone-with-container").returncode != 0)
 
     if section("restart"):
         worker = next((a for a in created_agents if a["name"] == "e2e-worker"), None) or new_agent("e2e-worker", "claude", c_anthropic, model="claude-sonnet-4-5", accepts_queue=True)
