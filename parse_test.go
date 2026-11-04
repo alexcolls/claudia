@@ -279,6 +279,40 @@ func TestAgy(t *testing.T) {
 	}
 }
 
+func TestAgyTools(t *testing.T) {
+	p := func() Parser { return agyAdapter{}.Parser(Agent{Model: "m"}) }
+	ups, res, live := replay(t, p(), "agy_tool")
+	var call, result *Event
+	for _, u := range ups {
+		for i := range u.Events {
+			switch u.Events[i].Kind {
+			case "tool_call":
+				call = &u.Events[i]
+			case "tool_result":
+				result = &u.Events[i]
+			}
+		}
+	}
+	if call == nil || call.Tool != "run_command" || !strings.Contains(call.Input, "CommandLine") {
+		t.Errorf("tool call: %+v", call)
+	}
+	if result == nil || result.ToolID != call.ToolID || !strings.Contains(result.Text, "from-agy") {
+		t.Errorf("tool output should reach the feed: %+v", result)
+	}
+	if k := kinds(ups); k["tool_call"] != 1 || k["tool_result"] != 1 {
+		t.Errorf("one step, announced once: %v", k)
+	}
+	// Per-step usage must add up to the run's total.
+	if u := live["m"]; u.Input != res.Cumulative["m"].Input || u.Output != res.Cumulative["m"].Output {
+		t.Errorf("live %+v, result %+v", u, res.Cumulative["m"])
+	}
+	// Exit 0 and SUCCESS, but the tool never ran.
+	_, res, _ = replay(t, p(), "agy_denied")
+	if !res.OK || len(res.Denials) == 0 {
+		t.Errorf("a soft denial should be counted: %+v", res)
+	}
+}
+
 // Junk on stdout must never break a run.
 func TestParsersIgnoreJunk(t *testing.T) {
 	for _, p := range []Parser{newClaude(), codexAdapter{}.Parser(Agent{}), agyAdapter{}.Parser(Agent{})} {

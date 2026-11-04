@@ -77,14 +77,17 @@ type agyLine struct {
 		Model string `json:"model"`
 	} `json:"init"`
 	StepUpdate *struct {
-		ConversationID string          `json:"conversation_id"`
-		StepIndex      int             `json:"step_index"`
-		State          string          `json:"state"`
-		StepType       string          `json:"step_type"`
-		TextDelta      string          `json:"text_delta"`
-		Usage          *agyUsage       `json:"usage"`
-		ToolName       string          `json:"tool_name"`
-		ToolInfo       json.RawMessage `json:"tool_info"`
+		ConversationID string    `json:"conversation_id"`
+		StepIndex      int       `json:"step_index"`
+		State          string    `json:"state"`
+		StepType       string    `json:"step_type"`
+		TextDelta      string    `json:"text_delta"`
+		Usage          *agyUsage `json:"usage"`
+		ToolName       string    `json:"tool_name"`
+		ToolInfo       *struct {
+			Parameters json.RawMessage `json:"parameters"`
+			Output     string          `json:"output"`
+		} `json:"tool_info"`
 	} `json:"step_update"`
 	Result *struct {
 		ConversationID string    `json:"conversation_id"`
@@ -94,6 +97,10 @@ type agyLine struct {
 		DurationSec    float64   `json:"duration_seconds"`
 		NumTurns       int       `json:"num_turns"`
 		Usage          *agyUsage `json:"usage"`
+		// Tools denied in headless mode. The run still exits 0 and reports SUCCESS.
+		DeniedActions []struct {
+			Action string `json:"action"`
+		} `json:"denied_actions"`
 	} `json:"result"`
 }
 
@@ -116,6 +123,9 @@ func (p *agyParser) Parse(line []byte) Update {
 		res := &Result{
 			OK: r.Status == "SUCCESS", Reason: strings.ToLower(r.Status), Error: r.Error,
 			Turns: r.NumTurns, DurationMS: int64(r.DurationSec * 1000), Cumulative: Usage{},
+		}
+		for _, d := range r.DeniedActions {
+			res.Denials = append(res.Denials, d.Action)
 		}
 		if r.Usage != nil && r.Usage.Input+r.Usage.Output+r.Usage.CacheRead > 0 {
 			res.Cumulative[p.model] = r.Usage.tokens() // cumulative across a resume
@@ -153,10 +163,18 @@ func (p *agyParser) step(l *agyLine, u *Update) {
 		id := "step-" + itoa(s.StepIndex)
 		if !p.tools[s.StepIndex] {
 			p.tools[s.StepIndex] = true
-			u.Events = append(u.Events, Event{Kind: "tool_call", Tool: s.ToolName, ToolID: id, Input: clipRaw(s.ToolInfo)})
+			call := Event{Kind: "tool_call", Tool: s.ToolName, ToolID: id}
+			if s.ToolInfo != nil {
+				call.Input = clipRaw(s.ToolInfo.Parameters)
+			}
+			u.Events = append(u.Events, call)
 		}
 		if s.State == "DONE" {
-			u.Events = append(u.Events, Event{Kind: "tool_result", ToolID: id})
+			done := Event{Kind: "tool_result", ToolID: id}
+			if s.ToolInfo != nil {
+				done.Text = clip(s.ToolInfo.Output)
+			}
+			u.Events = append(u.Events, done)
 		}
 	case "error_message":
 		u.Events = append(u.Events, Event{Kind: "status", Text: "agy reported an error"})
