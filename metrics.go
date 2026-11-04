@@ -65,7 +65,7 @@ func (a *App) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 			FROM runs r LEFT JOIN agents g ON g.id=r.agent_id WHERE r.started_at>=? GROUP BY r.agent_id ORDER BY usd DESC`,
 		"by_provider": `SELECT CASE WHEN g.id IS NULL THEN '(deleted)' WHEN c.preset IS NULL THEN 'subscription' ELSE c.preset END AS name, ` + perfCols + `
 			FROM runs r LEFT JOIN agents g ON g.id=r.agent_id LEFT JOIN credentials c ON c.id=g.credential_id
-			WHERE r.started_at>=? GROUP BY name ORDER BY usd DESC`,
+			WHERE r.started_at>=? GROUP BY 1 ORDER BY usd DESC`,
 		"by_model": `SELECT m.model AS name, COUNT(*) AS runs, COALESCE(SUM(m.usd),0) AS usd, SUM(m.input) AS input, SUM(m.output) AS output,
 			SUM(m.cache_read) AS cache_read, SUM(m.cache_write) AS cache_write
 			FROM run_models m JOIN runs r ON r.id=m.run_id WHERE r.started_at>=? GROUP BY m.model ORDER BY usd DESC`,

@@ -678,3 +678,50 @@ func TestSettingsNeverReturnSecrets(t *testing.T) {
 }
 
 func newTestReader(s string) *bufio.Reader { return bufio.NewReaderSize(strings.NewReader(s), 1<<20) }
+
+// Every dashboard query has to run, against real rows.
+func TestMetrics(t *testing.T) {
+	a := testApp(t)
+	c := cred(t, a, "c", "anthropic", map[string]string{"ANTHROPIC_API_KEY": "k"})
+	ag := apiAgent(t, a, "agent", "claude", ModeFull, c, "")
+	sub := apiAgent(t, a, "sub", "claude", ModeFull, 0, "")
+	for _, id := range []int64{ag.ID, sub.ID, 999} { // 999: a deleted agent
+		res, err := a.db.Exec(`INSERT INTO runs(agent_id,status,usd,usd_state,input,cache_read,turns,started_at,ended_at) VALUES(?,?,?,?,?,?,?,?,?)`, id, RunSucceeded, 0.5, USDReported, 100, 50, 2, now()-10, now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, _ := res.LastInsertId()
+		if _, err := a.db.Exec(`INSERT INTO run_models(run_id,model,input,output,cache_read,cache_write,usd) VALUES(?,?,?,?,?,?,?)`, run, "m", 100, 1, 50, 0, 0.5); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addTask(t, a, "x")
+	srv := httptest.NewServer(a.routes())
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/metrics", nil)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: a.signSession(now() + 100)})
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("metrics: %d", resp.StatusCode)
+	}
+	var m map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, r := range m["by_provider"].([]any) {
+		names[r.(map[string]any)["name"].(string)] = true
+	}
+	for _, want := range []string{"anthropic", "subscription", "(deleted)"} {
+		if !names[want] {
+			t.Errorf("by_provider lacks %s: %v", want, names)
+		}
+	}
+	if len(m["by_agent"].([]any)) != 3 || len(m["by_model"].([]any)) != 1 || len(m["by_day"].([]any)) != 1 || len(m["recent"].([]any)) != 3 {
+		t.Errorf("metrics: %v", m)
+	}
+}
