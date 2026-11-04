@@ -1,0 +1,31 @@
+# Image for agent containers. The CLIs live outside /home/agent because a
+# non-empty named volume hides whatever the image has at its mount point.
+FROM node:24-bookworm-slim
+
+ARG CLAUDE_CODE_VERSION=2.1.317
+ARG CODEX_VERSION=0.166.0
+# ponytail: amd64 only. For arm64, pass the linux_arm64 URL and sha512 from the
+# Antigravity release manifest as build args.
+ARG AGY_URL=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.0-5269980577660928/linux-x64/cli_linux_x64.tar.gz
+ARG AGY_SHA512=e6031f850929210705d8c2393a5665b82b8c3b19684a6d3c556cafa31f26f77acbf164dfee96ca84a5ae7670ac0cc238a974c981c517b269194bdccff271cbd5
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git jq openssh-client procps python3 ripgrep tmux \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} \
+ && npm cache clean --force
+
+RUN curl -fsSL -o /tmp/agy.tar.gz "$AGY_URL" \
+ && echo "$AGY_SHA512  /tmp/agy.tar.gz" | sha512sum -c - \
+ && tar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity \
+ && mv /usr/local/bin/antigravity /usr/local/bin/agy \
+ && rm /tmp/agy.tar.gz
+
+RUN useradd --create-home --uid 1001 agent
+
+ENV DISABLE_UPDATES=1 AGY_CLI_DISABLE_AUTO_UPDATE=true
+USER agent
+WORKDIR /home/agent
+CMD ["sleep", "infinity"]
