@@ -1,0 +1,23 @@
+name: claudia
+
+services:
+  # One-shot: builds the agent image and creates the agent network, so
+  # `docker compose up` is the only setup step.
+  agent-image:
+    image: claudia-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    command: ["true"]
+    restart: "no"
+    networks: [agents]
+
+networks:
+  agents:
+    name: claudia-agents
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+          gateway: 10.77.0.1
