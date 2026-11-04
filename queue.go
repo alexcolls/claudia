@@ -21,7 +21,9 @@ const (
 	TaskNoChanges = "no_changes" // the agent finished but committed nothing
 )
 
-const minFreeBytes = 2 << 30
+// minFreeBytes is the disk space below which dispatch stops. Agents filling a disk
+// would take the database down with them.
+var minFreeBytes uint64 = 2 << 30
 
 type Task struct {
 	ID              int64   `json:"id"`
