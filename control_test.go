@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net"
@@ -27,6 +28,72 @@ func testApp(t *testing.T) *App {
 		t.Fatal(err)
 	}
 	return a
+}
+
+func TestAccountLabel(t *testing.T) {
+	for _, c := range []struct{ status, want string }{
+		{`{"loggedIn":true,"authMethod":"claude.ai","email":"one@example.com","subscriptionType":"max"}`, "one@example.com (max)"},
+		{`{"loggedIn":true,"email":"one@example.com"}`, "one@example.com"},
+		{`{"loggedIn":true}`, "signed in"},
+		{`{"loggedIn":false,"authMethod":"none"}`, ""},
+		{`not json`, ""},
+	} {
+		if got := accountLabel(c.status); got != c.want {
+			t.Errorf("accountLabel(%s) = %q, want %q", c.status, got, c.want)
+		}
+	}
+}
+
+func TestSigninURL(t *testing.T) {
+	const real = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&code_challenge=y&state=z"
+	screen := "Opening browser to sign in…\nIf the browser didn't open, visit: " + real + "\n\nPaste code here if prompted >\n"
+	if got := signinURL(screen); got != real {
+		t.Errorf("got %q", got)
+	}
+	if got := signinURL(screen + "visit: https://claude.com/cai/oauth/authorize?state=newer\n"); !strings.HasSuffix(got, "state=newer") {
+		t.Errorf("the newest link should win: %q", got)
+	}
+	// Anything in the container can print to this screen.
+	for _, spoof := range []string{
+		"https://evil.example/oauth/authorize?x=1",
+		"https://claude.com.evil.example/oauth/authorize?x=1",
+		"https://evil.example/claude.com/oauth/authorize?x=1",
+		"https://claude.com@evil.example/oauth/authorize?x=1",
+		"http://claude.com/oauth/authorize?x=1",
+		"https://claude.com/somewhere-else?x=1",
+	} {
+		if got := signinURL("visit: " + spoof + "\n"); got != "" {
+			t.Errorf("offered %q", got)
+		}
+	}
+}
+
+// A database from v0.3 has no account column, and opening one twice must also work.
+func TestAgentAccountColumnMigrates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, cli TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
+		mode TEXT NOT NULL, allowed_tools TEXT NOT NULL DEFAULT '', credential_id INTEGER, accepts_queue INTEGER NOT NULL DEFAULT 1, token TEXT NOT NULL,
+		max_run_usd REAL NOT NULL DEFAULT 0, daily_budget_usd REAL NOT NULL DEFAULT 0, run_limit_sec INTEGER NOT NULL DEFAULT 3600,
+		pause_reason TEXT NOT NULL DEFAULT '', session TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+		INSERT INTO agents(name,cli,mode,token,created_at) VALUES('old','claude','full','t',1)`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+	for range 2 {
+		db, err := openDB(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var account string
+		if err := db.QueryRow(`SELECT account FROM agents WHERE name='old'`).Scan(&account); err != nil || account != "" {
+			t.Errorf("account = %q, %v", account, err)
+		}
+		db.Close()
+	}
 }
 
 func cred(t *testing.T, a *App, name, preset string, env map[string]string) int64 {

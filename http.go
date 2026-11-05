@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -281,6 +282,7 @@ func (a *App) routes() http.Handler {
 	api.HandleFunc("POST /api/agents/{id}/reset", a.handleReset)
 	api.HandleFunc("POST /api/agents/{id}/unpause", a.handleUnpause)
 	api.HandleFunc("GET /api/agents/{id}/terminal", a.handleTerminal)
+	api.HandleFunc("GET /api/agents/{id}/signin", a.handleSignin)
 	api.HandleFunc("POST /api/stop-all", a.handleStopAll)
 
 	api.HandleFunc("GET /api/tasks", a.handleTasks)
@@ -547,14 +549,92 @@ func (a *App) signedInCheck(id int64) string {
 	if err := a.ensureContainer(ctx, id); err != nil {
 		return "Couldn't start the container: " + err.Error()
 	}
-	out, err := docker(ctx, "exec", containerName(id), "claude", "auth", "status", "--json")
-	var st struct {
-		LoggedIn bool `json:"loggedIn"`
-	}
-	if err != nil || json.Unmarshal([]byte(out), &st) != nil || !st.LoggedIn {
-		return "This agent isn't signed in. Open its terminal tab and run: claude auth login"
+	if a.checkAccount(ctx, id) == "" {
+		return "This agent isn't signed in. Open its Terminal tab and tap Sign in."
 	}
 	return ""
+}
+
+// checkAccount asks the CLI who the agent is signed in as, and remembers the answer
+// for the agent list, which can't afford a docker exec per agent. "" means not signed
+// in. A failed exec says nothing about the login, so it leaves the saved answer alone.
+func (a *App) checkAccount(ctx context.Context, id int64) string {
+	out, err := docker(ctx, "exec", containerName(id), "claude", "auth", "status", "--json")
+	if err != nil {
+		return ""
+	}
+	account := accountLabel(out)
+	if _, err := a.db.Exec(`UPDATE agents SET account=? WHERE id=?`, account, id); err != nil {
+		log.Printf("agent %d: %v", id, err)
+	}
+	return account
+}
+
+// accountLabel names a login from `claude auth status --json`.
+func accountLabel(status string) string {
+	var st struct {
+		LoggedIn bool   `json:"loggedIn"`
+		Email    string `json:"email"`
+		Plan     string `json:"subscriptionType"`
+	}
+	if json.Unmarshal([]byte(status), &st) != nil || !st.LoggedIn {
+		return ""
+	}
+	switch {
+	case st.Email == "":
+		return "signed in"
+	case st.Plan == "":
+		return st.Email
+	}
+	return st.Email + " (" + st.Plan + ")"
+}
+
+// signinRe only matches Anthropic's sign-in pages. Anything running in the container
+// can print to this terminal, so a looser match would let a hijacked agent put a
+// phishing link in front of the owner.
+var signinRe = regexp.MustCompile(`https://(?:claude\.com|claude\.ai|platform\.claude\.com|console\.anthropic\.com)/\S*oauth/authorize\?\S+`)
+
+// signinURL finds the newest sign-in link on a terminal screen.
+func signinURL(screen string) string {
+	m := signinRe.FindAllString(screen, -1)
+	if len(m) == 0 {
+		return ""
+	}
+	return m[len(m)-1]
+}
+
+// handleSignin reports who a subscription agent is signed in as. If it isn't, it also
+// returns the link `claude auth login` is showing in the terminal: it's too long to
+// copy out of a wrapped terminal, especially on a phone. The link holds no secret, and
+// the sign-in itself still happens on Anthropic's page and in the CLI.
+func (a *App) handleSignin(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	ag, err := a.agent(id)
+	if err != nil || !ag.Subscription() {
+		apiError(w, http.StatusNotFound, "No such subscription agent")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	// A busy agent's container already exists. Checking it here could recreate it for
+	// a new image, which would kill the run.
+	if !a.isRunning(id) {
+		if err := a.ensureContainer(ctx, id); err != nil {
+			apiError(w, http.StatusInternalServerError, "Couldn't start the container: "+err.Error())
+			return
+		}
+	}
+	out := map[string]string{"account": a.checkAccount(ctx, id), "url": ""}
+	if out["account"] == "" {
+		// -J joins wrapped lines. This fails until the terminal has been opened.
+		if screen, err := docker(ctx, "exec", containerName(id), "tmux", "capture-pane", "-p", "-J", "-t", "main"); err == nil {
+			out["url"] = signinURL(screen)
+		}
+	}
+	writeJSON(w, out)
 }
 
 func (a *App) handleStop(w http.ResponseWriter, r *http.Request) {
