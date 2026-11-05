@@ -239,13 +239,13 @@ function fleetPage() {
       const st = await api("/state");
       clear(banners, st.dispatch_block ? h("div", { class: "banner" }, st.dispatch_block) : null);
       if (!st.agents.length) {
-        clear(list, h("div", { class: "card muted" }, "No agents yet. Add a credential in Settings, then create an agent below."));
+        clear(list, h("div", { class: "card muted" }, "No agents yet. Create one below. For an API key, add a credential in Settings first."));
         return;
       }
       clear(list, st.agents.map((ag) => h("a", { class: "list-link", href: "#/agents/" + ag.id },
         h("div", { class: "card" },
           h("div", { class: "row between" }, h("strong", { class: "break" }, ag.name), agentStatus(ag)),
-          h("div", { class: "small muted" }, [CLI_NAMES[ag.cli] || ag.cli, ag.model, words(ag.mode), ag.credential_id ? ag.preset : "subscription"].filter(Boolean).join(" · ")),
+          h("div", { class: "small muted" }, [CLI_NAMES[ag.cli] || ag.cli, ag.model, words(ag.mode), ag.credential_id ? ag.preset : (ag.account || "subscription, not signed in")].filter(Boolean).join(" · ")),
           ag.pause_reason ? h("div", { class: "small" }, ag.pause_reason) : null))));
     },
   };
@@ -281,7 +281,7 @@ function agentForm(existing, onDone) {
     const p = c && presets.find((x) => x.key === c.preset);
     let text = p && p.note ? p.note : "";
     if (!c && cli.value === "claude") {
-      text = "Subscription: after creating the agent, sign in from its terminal tab with `claude auth login`. Plan limits assume ordinary individual use, so this agent stays out of the queue by default, and costs aren't measured in USD.";
+      text = "Subscription: after creating the agent, sign in from its Terminal tab. Each agent keeps its own login, so add one agent per account. Plan limits assume ordinary individual use, so this agent stays out of the queue by default, and costs aren't measured in USD.";
     }
     note.textContent = text;
     if (!editing && !c) queue.checked = false;
@@ -381,14 +381,19 @@ function agentPage(id) {
     const box = h("div");
     const wrap = h("div", { class: "term-wrap" }, box);
     const status = h("span", { class: "small muted" }, "Connecting...");
-    const send = (data) => { if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(data)); };
+    const send = (data) => {
+      if (!ws || ws.readyState !== 1) return false;
+      ws.send(new TextEncoder().encode(data));
+      return true;
+    };
     // Phones have no Esc or Ctrl key. Above the terminal, since an on-screen keyboard
     // covers whatever is below it.
     const keys = h("div", { class: "keys" }, [["Esc", "\x1b"], ["Tab", "\t"], ["Ctrl-C", "\x03"], ["Ctrl-D", "\x04"], ["Up", "\x1b[A"], ["Down", "\x1b[B"], ["Enter", "\r"]]
       .map(([label, seq]) => h("button", { type: "button", onclick: () => { send(seq); t.focus(); } }, label)));
     let ws = null;
     const reconnect = h("button", { type: "button", hidden: true, onclick: () => connect() }, "Reconnect");
-    clear(body, ag && !ag.credential_id ? h("div", { class: "banner" }, "Subscription agent. To sign in, run: claude auth login") : null,
+    const signin = ag && !ag.credential_id ? signinBox(send) : null;
+    clear(body, signin && signin.el,
       h("div", { class: "row between" }, status, reconnect), keys, wrap,
       h("p", { class: "hint" }, "The session runs in tmux, so it keeps going if you lose connection. API keys aren't in this shell."));
     const t = new window.Terminal({ convertEol: false, fontSize: 13, cursorBlink: true, scrollback: 5000 });
@@ -400,7 +405,7 @@ function agentPage(id) {
     const onResize = () => { try { fit.fit(); sendSize(); } catch { /* not visible right now */ } };
     window.addEventListener("resize", onResize);
     const dispose = t.dispose.bind(t);
-    t.dispose = () => { window.removeEventListener("resize", onResize); if (ws) ws.close(); dispose(); };
+    t.dispose = () => { window.removeEventListener("resize", onResize); if (signin) signin.stop(); if (ws) ws.close(); dispose(); };
     t.onData(send);
     function connect() {
       reconnect.hidden = true;
@@ -413,6 +418,58 @@ function agentPage(id) {
     }
     onResize();
     connect();
+  }
+
+  // signinBox helps a subscription agent sign in. The CLI in the terminal runs the
+  // sign-in, on Anthropic's own page. This makes its long link tappable and gives phones
+  // somewhere to paste the code. The code only goes to the terminal, and isn't kept.
+  function signinBox(send) {
+    const box = h("div", { class: "banner", style: "display:flex;flex-direction:column;gap:8px" });
+    const code = h("input", { "aria-label": "Sign-in code", placeholder: "Paste the code here", autocomplete: "off", autocapitalize: "off", spellcheck: "false" });
+    const pasted = h("form", { class: "row", onsubmit: (e) => {
+      e.preventDefault();
+      if (!code.value.trim()) return;
+      if (!send(code.value.trim() + "\r")) { toast("The terminal isn't connected. Try again in a moment."); return; }
+      code.value = "";
+      toast("Code sent. Watch the terminal below.");
+    } }, h("span", { class: "grow" }, code), h("button", { class: "primary", type: "submit" }, "Send code"));
+    let timer = null, shownUrl = null;
+    const stop = () => { clearInterval(timer); timer = null; };
+    const poll = () => { if (!timer) timer = setInterval(check, 2000); };
+    function start() {
+      // Ctrl-C first, in case an earlier sign-in is still waiting for its code. Without
+      // the pause, the waiting CLI could read the command as the code.
+      if (!send("\x03")) { toast("The terminal is still connecting. Try again in a moment."); return; }
+      setTimeout(() => send("clear && claude auth login\r"), 500);
+      shownUrl = null;
+      clear(box, h("span", null, "Starting the sign-in..."));
+      poll();
+    }
+    async function check() {
+      let st;
+      try { st = await api("/agents/" + id + "/signin"); } catch { return; }
+      if (st.account) {
+        stop();
+        shownUrl = null;
+        clear(box, h("span", null, "Signed in as " + st.account + "."),
+          h("span", { class: "hint" }, "To change account, run claude auth logout here, then sign in again. Use a separate agent for each account you want to keep."));
+        if (st.account !== ag.account) refreshHead();
+        return;
+      }
+      if (st.url) {
+        poll(); // a sign-in left waiting on an earlier visit still needs watching
+        if (st.url === shownUrl) return; // redrawing would wipe a half-pasted code
+        shownUrl = st.url;
+        clear(box, h("a", { href: st.url, target: "_blank", rel: "noopener noreferrer" }, "Open the Claude sign-in page"), pasted,
+          h("span", { class: "hint" }, "Sign in there with the account for this agent, then paste the code it gives you."),
+          h("div", null, h("button", { type: "button", onclick: start }, "Start again")));
+      } else if (!timer) {
+        clear(box, h("span", null, "This agent isn't signed in to a Claude account."),
+          h("div", null, h("button", { type: "button", class: "primary", onclick: start }, "Sign in")));
+      }
+    }
+    check();
+    return { el: box, stop };
   }
 
   function showSettings() {
@@ -432,7 +489,7 @@ function agentPage(id) {
     ag = await api("/agents/" + id);
     clear(head,
       h("div", { class: "row between" }, h("h2", { class: "break" }, ag.name), agentStatus(ag)),
-      h("div", { class: "small muted" }, [CLI_NAMES[ag.cli] || ag.cli, ag.model, words(ag.mode)].filter(Boolean).join(" · ")),
+      h("div", { class: "small muted" }, [CLI_NAMES[ag.cli] || ag.cli, ag.model, words(ag.mode), ag.credential_id ? "" : (ag.account || "not signed in")].filter(Boolean).join(" · ")),
       ag.pause_reason ? h("div", { class: "row between" }, h("span", { class: "small break grow" }, ag.pause_reason),
         h("button", { type: "button", onclick: act(async () => { await api("/agents/" + id + "/unpause", { method: "POST" }); refreshHead(); }) }, "Resume")) : null);
     syncRunning();
@@ -444,7 +501,8 @@ function agentPage(id) {
     el,
     async refresh() {
       await refreshHead();
-      if (!started) { started = true; setTab("chat"); }
+      // A new subscription agent can't do anything until it signs in.
+      if (!started) { started = true; setTab(!ag.credential_id && !ag.account ? "terminal" : "chat"); }
     },
     destroy: teardown,
   };
