@@ -308,6 +308,9 @@ func (a *App) execRun(r *liveRun, j Job) Outcome {
 					pause = p
 				}
 			}
+			if up.Pause != "" {
+				pause = up.Pause
+			}
 			if len(up.Live) > 0 {
 				r.mu.Lock()
 				r.live.add(up.Live)

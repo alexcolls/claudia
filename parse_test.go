@@ -138,6 +138,37 @@ func TestClaudeBudgetStop(t *testing.T) {
 	}
 }
 
+// Reaching a subscription's limit must pause the agent, not burn task retries.
+func TestClaudePlanLimit(t *testing.T) {
+	ups, res, _ := replay(t, newClaude(), "claude_planlimit")
+	pause := ""
+	for _, u := range ups {
+		if u.Pause != "" {
+			pause = u.Pause
+		}
+	}
+	if pause != PauseUsageLimit {
+		t.Errorf("pause = %q", pause)
+	}
+	if res == nil || res.OK {
+		t.Fatalf("a limit fails the run: %+v", res)
+	}
+	if !strings.Contains(res.Error, "resets") {
+		t.Errorf("the owner should see when it resets: %q", res.Error)
+	}
+	// The wording is the fallback if the event ever changes shape.
+	if got := pauseFromText(res.Error); got != PauseUsageLimit {
+		t.Errorf("pauseFromText(%q) = %q", res.Error, got)
+	}
+	// Every subscription run reports this event. Most of them aren't at a limit.
+	for _, status := range []string{"allowed", "allowed_warning"} {
+		line := `{"type":"rate_limit_event","rate_limit_info":{"status":"` + status + `"}}`
+		if u := newClaude().Parse([]byte(line)); u.Pause != "" {
+			t.Errorf("%s paused the agent", status)
+		}
+	}
+}
+
 // A crash loses a run's spend from the CLI's totals. The next run's cost must
 // be only its own.
 func TestClaudeCrashThenResume(t *testing.T) {

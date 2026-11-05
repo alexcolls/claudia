@@ -109,6 +109,11 @@ type claudeLine struct {
 	Error   string `json:"error"`
 	Attempt int    `json:"attempt"`
 
+	// rate_limit_event: a subscription's usage limits
+	RateLimit *struct {
+		Status string `json:"status"`
+	} `json:"rate_limit_info"`
+
 	// system/init
 	MCPServers []struct {
 		Name   string `json:"name"`
@@ -167,6 +172,10 @@ func (p *claudeParser) Parse(line []byte) Update {
 					u.Events = append(u.Events, Event{Kind: "status", Text: "MCP server " + s.Name + ": " + s.Status})
 				}
 			}
+		}
+	case "rate_limit_event":
+		if l.RateLimit != nil && l.RateLimit.Status == "rejected" {
+			u.Pause = PauseUsageLimit
 		}
 	case "result":
 		u.Result = claudeResult(&l)
