@@ -85,6 +85,7 @@ type Update struct {
 	Session string
 	Live    Usage   // tokens first seen on this line, for estimates during the run
 	Retry   string  // non-empty when the CLI is retrying; holds its error category
+	Pause   string  // non-empty when the CLI reports a limit that retrying can't get past
 	Result  *Result // set when the line reports the end of a turn
 }
 

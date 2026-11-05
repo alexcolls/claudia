@@ -4,10 +4,10 @@ FROM node:24-bookworm-slim
 
 ARG CLAUDE_CODE_VERSION=2.1.317
 ARG CODEX_VERSION=0.166.0
-# ponytail: amd64 only. For arm64, pass the linux_arm64 URL and sha512 from the
-# Antigravity release manifest as build args.
-ARG AGY_URL=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.0-5269980577660928/linux-x64/cli_linux_x64.tar.gz
-ARG AGY_SHA512=e6031f850929210705d8c2393a5665b82b8c3b19684a6d3c556cafa31f26f77acbf164dfee96ca84a5ae7670ac0cc238a974c981c517b269194bdccff271cbd5
+ARG AGY_VERSION=1.5.0-5269980577660928
+ARG AGY_SHA512_AMD64=e6031f850929210705d8c2393a5665b82b8c3b19684a6d3c556cafa31f26f77acbf164dfee96ca84a5ae7670ac0cc238a974c981c517b269194bdccff271cbd5
+# Hashed from Google's bucket: the release manifest only lists the newest version.
+ARG AGY_SHA512_ARM64=509518b2820945db2bea5e013ca43a49df5c78927c3ac341a1115287d52627356e1e9506ac0d2040fb467915fba4dde90061d091fddbddf8ddc212637ae40150
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -17,8 +17,13 @@ RUN apt-get update \
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} \
  && npm cache clean --force
 
-RUN curl -fsSL -o /tmp/agy.tar.gz "$AGY_URL" \
- && echo "$AGY_SHA512  /tmp/agy.tar.gz" | sha512sum -c - \
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) path=linux-x64/cli_linux_x64.tar.gz; sum=$AGY_SHA512_AMD64 ;; \
+      arm64) path=linux-arm/cli_linux_arm64.tar.gz; sum=$AGY_SHA512_ARM64 ;; \
+      *) echo "Antigravity has no build for this CPU" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/agy.tar.gz "https://storage.googleapis.com/antigravity-public/antigravity-cli/$AGY_VERSION/$path" \
+ && echo "$sum  /tmp/agy.tar.gz" | sha512sum -c - \
  && tar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity \
  && mv /usr/local/bin/antigravity /usr/local/bin/agy \
  && rm /tmp/agy.tar.gz

@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS agents (
 	accepts_queue INTEGER NOT NULL DEFAULT 1, token TEXT NOT NULL,
 	max_run_usd REAL NOT NULL DEFAULT 0, daily_budget_usd REAL NOT NULL DEFAULT 0,
 	run_limit_sec INTEGER NOT NULL DEFAULT 3600, pause_reason TEXT NOT NULL DEFAULT '',
-	session TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+	session TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, account TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, marks TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS tasks (
 	id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, repo TEXT NOT NULL, base_branch TEXT NOT NULL DEFAULT 'main',
@@ -78,6 +78,10 @@ func openDB(path string) (*sql.DB, error) {
 	// and a few dozen agents; never hold rows open across another query.
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
+		return nil, fmt.Errorf("schema: %w", err)
+	}
+	// Databases from v0.3 don't have this column.
+	if _, err := db.Exec(`ALTER TABLE agents ADD COLUMN account TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	return db, nil
@@ -325,7 +329,8 @@ type Agent struct {
 	Mode           string  `json:"mode"`
 	AllowedTools   string  `json:"allowed_tools"`
 	CredentialID   int64   `json:"credential_id"`
-	Preset         string  `json:"preset"` // empty means signed in from the terminal, on a subscription
+	Preset         string  `json:"preset"`  // empty means signed in from the terminal, on a subscription
+	Account        string  `json:"account"` // who a subscription agent was last seen signed in as; never a token
 	AcceptsQueue   bool    `json:"accepts_queue"`
 	Token          string  `json:"-"`
 	MaxRunUSD      float64 `json:"max_run_usd"`
@@ -341,12 +346,12 @@ type Agent struct {
 func (ag Agent) Subscription() bool { return ag.CredentialID == 0 }
 
 const agentCols = `a.id,a.name,a.cli,a.model,a.mode,a.allowed_tools,COALESCE(a.credential_id,0),COALESCE(c.preset,''),
-	a.accepts_queue,a.token,a.max_run_usd,a.daily_budget_usd,a.run_limit_sec,a.pause_reason,a.session,a.created_at`
+	a.accepts_queue,a.token,a.max_run_usd,a.daily_budget_usd,a.run_limit_sec,a.pause_reason,a.session,a.created_at,a.account`
 
 func scanAgent(s interface{ Scan(...any) error }) (Agent, error) {
 	var ag Agent
 	err := s.Scan(&ag.ID, &ag.Name, &ag.CLI, &ag.Model, &ag.Mode, &ag.AllowedTools, &ag.CredentialID, &ag.Preset,
-		&ag.AcceptsQueue, &ag.Token, &ag.MaxRunUSD, &ag.DailyBudgetUSD, &ag.RunLimitSec, &ag.PauseReason, &ag.Session, &ag.CreatedAt)
+		&ag.AcceptsQueue, &ag.Token, &ag.MaxRunUSD, &ag.DailyBudgetUSD, &ag.RunLimitSec, &ag.PauseReason, &ag.Session, &ag.CreatedAt, &ag.Account)
 	return ag, err
 }
 

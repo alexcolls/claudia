@@ -3,7 +3,7 @@
 
 Costs nothing. Start things first:
 
-  mkdir -p /tmp/g && git init -q --bare -b main /tmp/g/repo.git   # plus one commit on main
+  mkdir -p /tmp/g && git init -q --bare -b main /tmp/g/repo.git   # plus one commit on main, adding only seed.txt
   go run ./testdata/fakemodel -addr 10.77.0.1:9999 -log /tmp/fake.jsonl -git /tmp/g
   CLAUDIA_PASSWORD=e2e-password CLAUDIA_PORT=18080 docker compose up -d --build
   python3 testdata/e2e.py /tmp/fake.jsonl /tmp/g
@@ -448,6 +448,78 @@ def main():
         check("a paused agent refuses work", "authentication" in err["error"], err)
         api(f"/agents/{bad['id']}/unpause", "POST")
         check("the owner can resume it", agent_state(bad)["pause_reason"] == "")
+
+    if section("accounts"):
+        signin = lambda ag: api(f"/agents/{ag['id']}/signin")
+
+        def fake_login(ag, email, plan):
+            """A login with made-up tokens that points the CLI at the fake model."""
+            files = {
+                ".claude/.credentials.json": {"claudeAiOauth": {"accessToken": "fake", "refreshToken": "fake", "expiresAt": 9999999999999,
+                                                                "scopes": ["user:inference", "user:profile"], "subscriptionType": plan}},
+                ".claude.json": {"hasCompletedOnboarding": True, "oauthAccount": {"emailAddress": email, "organizationName": "Example",
+                                                                                  "organizationUuid": "00000000-0000-0000-0000-000000000000",
+                                                                                  "accountUuid": "00000000-0000-0000-0000-000000000001"}},
+                ".claude/settings.json": {"env": {"ANTHROPIC_BASE_URL": FAKE, "DISABLE_TELEMETRY": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}},
+            }
+            for path, content in files.items():
+                sh("docker", "exec", "-i", container(ag), "sh", "-c", f"mkdir -p ~/.claude && cat > ~/{path}", input=json.dumps(content), check_rc=True)
+
+        one = new_agent("e2e-sub-one", "claude", 0, model="claude-sonnet-4-5")
+        two = new_agent("e2e-sub-two", "claude", 0, model="claude-sonnet-4-5")
+        check("a new agent isn't signed in", signin(one) == {"account": "", "url": ""}, signin(one))
+        before = len(runs("e2e-sub-one"))  # history outlives agents of the same name
+        say(one, "hello")
+        wait("the sign-in error", lambda: [e for e in feed(one)[0] if e["kind"] == "error" and "isn't signed in" in e["text"]], 60)
+        check("a run needs a sign-in first", len(runs("e2e-sub-one")) == before)
+
+        # Claude's own sign-in screen, up to the point a person takes over. Narrow, so
+        # the long link wraps over many lines, as it would on a phone.
+        run_in(one, "tmux", "-u", "new", "-d", "-s", "main", "-x", "40", "-y", "30", "claude auth login")
+        url = wait("the sign-in link", lambda: signin(one)["url"], 60)
+        check("the sign-in link survives wrapping", url.startswith("https://claude.com/") and "code_challenge=" in url and "&state=" in url, url[:60])
+        run_in(one, "tmux", "kill-server")
+        run_in(one, "tmux", "new", "-d", "-s", "main", "-x", "200", "echo https://claude.com.evil.example/oauth/authorize?x=1; sleep 60")
+        time.sleep(1)
+        check("a look-alike link isn't offered", signin(one)["url"] == "", signin(one))
+        run_in(one, "tmux", "kill-server")
+
+        signin(two)  # starts its container
+        fake_login(one, "one@example.com", "max")
+        fake_login(two, "two@example.com", "pro")
+        check("each agent has its own account", (signin(one)["account"], signin(two)["account"]) == ("one@example.com (max)", "two@example.com (pro)"))
+        listed = {a["name"]: a["account"] for a in api("/state")["agents"]}
+        check("the agent list shows them", (listed["e2e-sub-one"], listed["e2e-sub-two"]) == ("one@example.com (max)", "two@example.com (pro)"), listed)
+        run_in(two, "sh", "-c", "rm ~/.claude/.credentials.json")
+        check("signing out of one leaves the other", (signin(one)["account"], signin(two)["account"]) == ("one@example.com (max)", ""))
+
+        say(one, "hello")
+        idle(one)
+        r = last_run("e2e-sub-one")
+        check("runs on the subscription, in tokens", r["status"] == "succeeded" and r["usd_state"] == "subscription" and r["usd"] == 0 and r["tokens"] > 0, r)
+
+        say(one, "PLANLIMIT")
+        idle(one)
+        r, st = last_run("e2e-sub-one"), agent_state(one)
+        check("a plan limit fails the run", r["status"] == "failed", r)
+        check("a plan limit pauses the agent and says when it resets", "usage limit reached" in st["pause_reason"] and "resets" in st["pause_reason"], st["pause_reason"])
+        err = say(one, "again", want=409)
+        check("a paused account refuses work", "usage limit" in err["error"], err)
+
+        others = [ag for ag in api("/state")["agents"] if ag["accepts_queue"]]
+        for ag in others:  # so that only the agent under test can take the task
+            api(f"/agents/{ag['id']}", "PUT", {**ag, "accepts_queue": False})
+        worker = new_agent("e2e-sub-worker", "claude", 0, model="claude-sonnet-4-5")
+        signin(worker)
+        fake_login(worker, "worker@example.com", "max")
+        api(f"/agents/{worker['id']}", "PUT", {**agent_state(worker), "accepts_queue": True})
+        limited = api("/tasks", "POST", {"repo": REPO, "git_credential_id": c_git, "title": "hits the limit", "prompt": "PLANLIMIT", "max_attempts": 2})
+        wait("the worker to pause", lambda: agent_state(worker)["pause_reason"], 120)
+        t = wait("the task to go back in the queue", lambda: (lambda x: x if x["status"] == "queued" else None)(next(x for x in api("/tasks")["tasks"] if x["id"] == limited["id"])), 60)
+        check("the task waits without using up an attempt", t["attempts"] == 0, t)
+        api(f"/tasks/{limited['id']}", "DELETE", want=None)
+        for ag in others:
+            api(f"/agents/{ag['id']}", "PUT", ag)
 
     if section("isolation"):
         say(claude, "hello")

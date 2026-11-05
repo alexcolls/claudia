@@ -120,6 +120,9 @@ func liveUSD(u Usage, prices map[string]Price) float64 {
 	return total
 }
 
+// PauseUsageLimit is the pause reason for a subscription out of quota.
+const PauseUsageLimit = "usage limit reached"
+
 // pauseClass says whether a CLI error needs the owner rather than a task retry.
 func pauseClass(category string) string {
 	switch category {
@@ -138,6 +141,8 @@ func pauseClass(category string) string {
 func pauseFromText(text string) string {
 	t := strings.ToLower(text)
 	switch {
+	case strings.Contains(t, "hit your limit"), strings.Contains(t, "usage limit reached"):
+		return PauseUsageLimit
 	case strings.Contains(t, "401 unauthorized"), strings.Contains(t, "incorrect api key"), strings.Contains(t, "api key not valid"),
 		strings.Contains(t, "invalid api key"), strings.Contains(t, "authentication failed"), strings.Contains(t, "authentication required"):
 		return "authentication failed"
