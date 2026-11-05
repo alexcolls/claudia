@@ -7,6 +7,7 @@
 //
 //	TOOL:<shell command>   ask to run the command, then answer "done"
 //	SLOW                   stream text, stalling for a minute mid-response
+//	PLANLIMIT              answer as if the subscription's usage limit was reached
 //	ASK                    call AskUserQuestion, then answer "done"
 //	anything else          answer "ok"
 package main
@@ -155,6 +156,17 @@ func anthropic(w http.ResponseWriter, r *http.Request) {
 	}
 	sys, _ := json.Marshal(req.System)
 	all, _ := json.Marshal(req.Messages)
+	if strings.Contains(string(all), "PLANLIMIT") {
+		reset := fmt.Sprint(time.Now().Add(time.Hour).Unix())
+		for k, v := range map[string]string{"status": "rejected", "reset": reset, "representative-claim": "five_hour", "overage-status": "rejected",
+			"5h-status": "rejected", "5h-reset": reset, "5h-utilization": "1.0"} {
+			w.Header().Set("anthropic-ratelimit-unified-"+k, v)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit."}}`)
+		return
+	}
 	tools := make([]string, 0, len(req.Tools))
 	for _, t := range req.Tools {
 		tools = append(tools, t.Name)
